@@ -1,27 +1,22 @@
-name: Run cdk8s Demo
+name: cdk8s-demo-pipeline
 
 on:
   push:
-    branches:
-      - master
-  workflow_dispatch:
+    branches: [main]
 
 jobs:
-  demo:
+  cdk8s-demo:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v3
-
-      - name: Set up Kind Kubernetes cluster
-        uses: helm/kind-action@v1.8.0
 
       - name: Install kubectl
         run: |
-          curl -LO "https://dl.k8s.io/release/$(curl -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          KUBECTL_VERSION=$(curl -s https://dl.k8s.io/release/stable.txt)
+          curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           chmod +x kubectl
-          sudo mv kubectl /usr/local/bin
+          sudo mv kubectl /usr/local/bin/kubectl
           kubectl version --client
 
       - name: Install Helm
@@ -29,39 +24,39 @@ jobs:
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           helm version
 
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
       - name: Install cdk8s CLI
         run: |
-          curl -fsSL https://github.com/cdk8s-team/cdk8s-cli/releases/latest/download/cdk8s-linux-x64 > cdk8s
-          chmod +x cdk8s
-          sudo mv cdk8s /usr/local/bin
+          npm install -g cdk8s-cli
           cdk8s --version
 
-      - name: Clone cdk8s demo
+      - name: Clone cdk8s-demo
         run: |
-          git clone https://github.com/vfarcic/cdk8s-demo.git
+          git clone https://github.com/vfarcic/cdk8s-demo
           cd cdk8s-demo
 
-          # Add Helm repo and install Crossplane
+      - name: Set up Kubernetes tools
+        run: |
+          cd cdk8s-demo
           helm repo add crossplane-stable https://charts.crossplane.io/stable
           helm repo update
-
           helm upgrade --install crossplane crossplane-stable/crossplane \
-            --namespace crossplane-system \
-            --create-namespace \
-            --wait
+            --namespace crossplane-system --create-namespace --wait
+          kubectl apply -f crossplane/provider-aws.yaml
+          kubectl apply -f crossplane/provider-sql.yaml
 
-          # Wait until pods are ready (optional)
-          kubectl wait --for=condition=Ready pods --all --namespace crossplane-system --timeout=120s
-
-          # Apply providers (simulate if you want to skip actual AWS provisioning)
-          kubectl apply --filename crossplane/provider-aws.yaml || true
-          kubectl apply --filename crossplane/provider-sql.yaml || true
-
-          # Optional: Run cdk8s commands
-          # cd cdk8s-demo
-          # cdk8s init go-app
-
-      - name: Confirm Cluster is Working
+      - name: Initialize cdk8s Go App and Generate YAML
         run: |
-          kubectl get nodes
-          kubectl get pods -A
+          cd cdk8s-demo
+          cdk8s init go-app
+          cdk8s synth
+
+      - name: Import Crossplane CRDs into cdk8s
+        run: |
+          cd cdk8s-demo
+          cdk8s import github:crossplane/crossplane@1.9.1 --language go
+          kubectl get crd -o json | cdk8s import /dev/stdin --language go
