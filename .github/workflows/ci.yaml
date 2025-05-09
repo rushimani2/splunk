@@ -1,95 +1,67 @@
-name: CDK8s Synth and Demo
-
-permissions:
-  contents: write
+name: Run cdk8s Demo
 
 on:
   push:
-  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
 
 jobs:
-  synth:
+  demo:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
+      - name: Set up Kind Kubernetes cluster
+        uses: helm/kind-action@v1.8.0
 
-    - name: Install required tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y curl git jq
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin
+          kubectl version --client
 
-        # Install Helm
-        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
 
-        # Install kubectl safely
-        K8S_VERSION=$(curl -s https://dl.k8s.io/release/stable.txt)
-        if [ -z "$K8S_VERSION" ]; then
-          echo "Failed to fetch latest Kubernetes version"
-          exit 1
-        fi
-        curl -LO "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/amd64/kubectl"
-        chmod +x kubectl
-        sudo mv kubectl /usr/local/bin/
+      - name: Install cdk8s CLI
+        run: |
+          curl -fsSL https://github.com/cdk8s-team/cdk8s-cli/releases/latest/download/cdk8s-linux-x64 > cdk8s
+          chmod +x cdk8s
+          sudo mv cdk8s /usr/local/bin
+          cdk8s --version
 
-        # Install CDK8s CLI
-        npm install -g cdk8s-cli
+      - name: Clone cdk8s demo
+        run: |
+          git clone https://github.com/vfarcic/cdk8s-demo.git
+          cd cdk8s-demo
 
-    - name: Run CDK8s demo
-      run: |
-        git clone https://github.com/vfarcic/cdk8s-demo
-        cd cdk8s-demo
+          # Add Helm repo and install Crossplane
+          helm repo add crossplane-stable https://charts.crossplane.io/stable
+          helm repo update
 
-        # Set up Crossplane using Helm
-        helm repo add crossplane-stable https://charts.crossplane.io/stable
-        helm repo update
-        helm upgrade --install crossplane crossplane-stable/crossplane \
-          --namespace crossplane-system --create-namespace --wait
+          helm upgrade --install crossplane crossplane-stable/crossplane \
+            --namespace crossplane-system \
+            --create-namespace \
+            --wait
 
-        kubectl apply --filename crossplane/provider-aws.yaml || true
-        kubectl apply --filename crossplane/provider-sql.yaml || true
+          # Wait until pods are ready (optional)
+          kubectl wait --for=condition=Ready pods --all --namespace crossplane-system --timeout=120s
 
-        # Initialize cdk8s project
-        cdk8s init go-app || true
+          # Apply providers (simulate if you want to skip actual AWS provisioning)
+          kubectl apply --filename crossplane/provider-aws.yaml || true
+          kubectl apply --filename crossplane/provider-sql.yaml || true
 
-        # Optional display
-        ls -l
-        ls -l dist || true
+          # Optional: Run cdk8s commands
+          # cd cdk8s-demo
+          # cdk8s init go-app
 
-        # Synthesize manifests
-        cdk8s synth || true
-
-        # Import CRDs (optional commands, may fail without context)
-        cdk8s import github:crossplane/crossplane@1.9.1 --language go || true
-        kubectl get crd --output json | cdk8s import /dev/stdin --language go || true
-        mkdir -p crds
-        echo 'placeholder for get-crds.sh logic' > crds/get-crds.sh
-        chmod +x crds/get-crds.sh
-        ./crds/get-crds.sh || true
-        cdk8s import crds/crossplane.yaml --language go || true
-
-    - name: Ensure dist/ directory exists
-      run: mkdir -p dist
-
-    - name: Run `cdk8s synth`
-      run: cdk8s synth
-
-    - name: Upload generated manifests as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: cdk8s-manifests
-        path: dist/
-
-    - name: Commit and push synthesized manifests
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add dist/
-        git diff --cached --quiet dist/ || git commit -m "chore: update synthesized Kubernetes manifests"
-        git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:${{ github.ref }}
+      - name: Confirm Cluster is Working
+        run: |
+          kubectl get nodes
+          kubectl get pods -A
