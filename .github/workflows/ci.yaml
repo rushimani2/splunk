@@ -3,7 +3,7 @@ name: Run cdk8s Script on Commit
 on:
   push:
     branches:
-      - main  # Adjust the branch name if needed
+      - master  # Adjust the branch name if needed
   pull_request:
     branches:
       - main  # Adjust the branch name if needed
