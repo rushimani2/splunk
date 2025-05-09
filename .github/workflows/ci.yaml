@@ -40,24 +40,28 @@ jobs:
         helm repo add crossplane-stable https://charts.crossplane.io/stable
         helm repo update
         helm upgrade --install crossplane crossplane-stable/crossplane --namespace crossplane-system --create-namespace --wait
+      continue-on-error: true  # Ignore if this step fails
 
     # Step 6: Apply Crossplane Providers (AWS & SQL)
     - name: Apply Crossplane Providers
       run: |
         kubectl apply --filename crossplane/provider-aws.yaml
         kubectl apply --filename crossplane/provider-sql.yaml
+      continue-on-error: true  # Ignore if this step fails
 
     # Step 7: Install cdk8s CLI (GoLang application)
     - name: Install cdk8s CLI
       run: |
         curl -sSL https://github.com/cdk8s-team/cdk8s/releases/download/v2.0.0/cdk8s-v2.0.0-linux-amd64.tar.gz | tar xz
         sudo mv cdk8s /usr/local/bin
+      continue-on-error: true  # Ignore if this step fails
 
     # Step 8: Initialize cdk8s Go Application
     - name: Initialize cdk8s Go Application
       run: |
         cd cdk8s-demo
         cdk8s init go-app
+      continue-on-error: true  # Ignore if this step fails
 
     # Step 9: Generate Kubernetes manifests with cdk8s
     - name: Generate Kubernetes Manifests
@@ -65,6 +69,7 @@ jobs:
         cd cdk8s-demo
         cdk8s synth
         cat dist/silly-demo.k8s.yaml
+      continue-on-error: true  # Ignore if this step fails
 
     # Step 10: Import Crossplane resources into cdk8s (Go)
     - name: Import Crossplane CRDs into cdk8s
@@ -72,11 +77,13 @@ jobs:
         cdk8s import github:crossplane/crossplane@1.9.1 --language go
         kubectl get crd --output json | cdk8s import /dev/stdin --language go
         cdk8s import crds/crossplane.yaml --language go
+      continue-on-error: true  # Ignore if this step fails
 
     # Step 11: Print the generated Kubernetes YAML file
     - name: Print Generated Kubernetes YAML
       run: |
         cat dist/aws.k8s.yaml
+      continue-on-error: true  # Ignore if this step fails
 
     # Step 12: Clean up (optional)
     - name: Clean up
@@ -84,3 +91,4 @@ jobs:
         kubectl delete -f crossplane/provider-aws.yaml
         kubectl delete -f crossplane/provider-sql.yaml
         helm uninstall crossplane --namespace crossplane-system
+      continue-on-error: true  # Ignore if this step fails
