@@ -1,50 +1,86 @@
-name: Run cdk8s Demo Script
+name: Run cdk8s Script on Commit
 
 on:
   push:
     branches:
-      - '**'  # Triggers on commits to any branch
+      - main  # Adjust the branch name if needed
+  pull_request:
+    branches:
+      - main  # Adjust the branch name if needed
 
 jobs:
-  run-script:
+  setup-and-run:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+    # Step 1: Checkout the repository
+    - name: Checkout Repository
+      uses: actions/checkout@v2
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y curl unzip git helm kubectl
-          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-          sudo apt install -y nodejs
-          npm install -g cdk8s-cli
-          go install github.com/aws/jsii-release/go/cmd/jsii@latest || true
+    # Step 2: Set up Helm (required for your script)
+    - name: Set up Helm
+      run: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-      - name: Run cdk8s demo script
-        run: |
-          set +e  # Continue on error
-          git clone https://github.com/vfarcic/cdk8s-demo
-          cd cdk8s-demo || exit 0
+    # Step 3: Update apt and install dependencies
+    - name: Update apt and Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y git curl
 
-          helm repo add crossplane-stable https://charts.crossplane.io/stable
-          helm repo update
+    # Step 4: Clone the cdk8s-demo repository and set up the environment
+    - name: Clone cdk8s Demo Repo
+      run: |
+        git clone https://github.com/vfarcic/cdk8s-demo
+        cd cdk8s-demo
 
-          helm upgrade --install crossplane crossplane-stable/crossplane \
-            --namespace crossplane-system --create-namespace --wait
+    # Step 5: Install Crossplane using Helm
+    - name: Install Crossplane with Helm
+      run: |
+        helm repo add crossplane-stable https://charts.crossplane.io/stable
+        helm repo update
+        helm upgrade --install crossplane crossplane-stable/crossplane --namespace crossplane-system --create-namespace --wait
 
-          kubectl apply --filename crossplane/provider-aws.yaml || true
-          kubectl apply --filename crossplane/provider-sql.yaml || true
+    # Step 6: Apply Crossplane Providers (AWS & SQL)
+    - name: Apply Crossplane Providers
+      run: |
+        kubectl apply --filename crossplane/provider-aws.yaml
+        kubectl apply --filename crossplane/provider-sql.yaml
 
-          cdk8s init go-app || true
-          cdk8s synth || true
+    # Step 7: Install cdk8s CLI (GoLang application)
+    - name: Install cdk8s CLI
+      run: |
+        curl -sSL https://github.com/cdk8s-team/cdk8s/releases/download/v2.0.0/cdk8s-v2.0.0-linux-amd64.tar.gz | tar xz
+        sudo mv cdk8s /usr/local/bin
 
-          cdk8s import github:crossplane/crossplane@1.9.1 --language go || true
+    # Step 8: Initialize cdk8s Go Application
+    - name: Initialize cdk8s Go Application
+      run: |
+        cd cdk8s-demo
+        cdk8s init go-app
 
-          kubectl get crd --output json | cdk8s import /dev/stdin --language go || true
+    # Step 9: Generate Kubernetes manifests with cdk8s
+    - name: Generate Kubernetes Manifests
+      run: |
+        cd cdk8s-demo
+        cdk8s synth
+        cat dist/silly-demo.k8s.yaml
 
-          chmod +x get-crds.sh || true
-          ./get-crds.sh || true
+    # Step 10: Import Crossplane resources into cdk8s (Go)
+    - name: Import Crossplane CRDs into cdk8s
+      run: |
+        cdk8s import github:crossplane/crossplane@1.9.1 --language go
+        kubectl get crd --output json | cdk8s import /dev/stdin --language go
+        cdk8s import crds/crossplane.yaml --language go
 
-          cdk8s import crds/crossplane.yaml --language go || true
+    # Step 11: Print the generated Kubernetes YAML file
+    - name: Print Generated Kubernetes YAML
+      run: |
+        cat dist/aws.k8s.yaml
+
+    # Step 12: Clean up (optional)
+    - name: Clean up
+      run: |
+        kubectl delete -f crossplane/provider-aws.yaml
+        kubectl delete -f crossplane/provider-sql.yaml
+        helm uninstall crossplane --namespace crossplane-system
