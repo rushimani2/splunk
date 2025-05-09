@@ -1,7 +1,9 @@
 name: Run cdk8s Demo Script
 
 on:
-  workflow_dispatch:  # Triggered manually from GitHub UI
+  push:
+    branches:
+      - '**'  # Triggers on commits to any branch
 
 jobs:
   run-script:
