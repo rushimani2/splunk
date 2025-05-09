@@ -1,19 +1,18 @@
-name: Full CDK8s Demo
+name: CDK8s Synth and Apply
 
 permissions:
   contents: write
 
 on:
-  workflow_dispatch:
   push:
   pull_request:
 
 jobs:
-  cdk8s-demo:
+  synth:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repo
+    - name: Checkout code
       uses: actions/checkout@v3
 
     - name: Set up Node.js
@@ -24,66 +23,59 @@ jobs:
     - name: Install required tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y helm kubectl git jq
-        curl -fsSL https://raw.githubusercontent.com/cdk8s-team/cdk8s-cli/main/install.sh | bash
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        sudo apt-get install -y curl git jq
 
-    - name: Clone cdk8s demo
-      run: |
-        git clone https://github.com/vfarcic/cdk8s-demo
-        cd cdk8s-demo
+        # Install Helm
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-    - name: Setup Helm Repos (Cluster Simulation)
+        # Install kubectl
+        curl -LO "https://dl.k8s.io/release/$(curl -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+
+        # Install CDK8s CLI
+        npm install -g cdk8s-cli
+
+    - name: Setup Kubernetes with Crossplane
       run: |
         helm repo add crossplane-stable https://charts.crossplane.io/stable
         helm repo update
-        echo "::notice:: Helm repo setup done."
+        helm upgrade --install crossplane crossplane-stable/crossplane \
+          --namespace crossplane-system \
+          --create-namespace \
+          --wait
 
-    - name: Simulate Helm Install Crossplane
-      run: |
-        echo "::warning:: Helm install requires a running cluster. Skipping in GitHub Actions."
+        kubectl apply -f crossplane/provider-aws.yaml
+        kubectl apply -f crossplane/provider-sql.yaml
 
-    - name: Install CDK8s CLI (again for path safety)
-      run: |
-        npm install -g cdk8s-cli
-        cdk8s --version
-
-    - name: Initialize CDK8s Go App
-      working-directory: cdk8s-demo
+    - name: Initialize and synthesize CDK8s app
       run: |
         cdk8s init go-app
-
-    - name: Synthesize Kubernetes Manifests
-      working-directory: cdk8s-demo
-      run: |
         cdk8s synth
 
     - name: Import Crossplane CRDs
-      working-directory: cdk8s-demo
       run: |
         cdk8s import github:crossplane/crossplane@1.9.1 --language go
-        echo "::notice:: Crossplane CRDs imported."
+        kubectl get crd -o json | cdk8s import /dev/stdin --language go
 
-    - name: Simulate kubectl get crd and import
-      run: |
-        echo "::warning:: kubectl commands require a real cluster. Skipping in GitHub Actions."
+        # Optional: Add your get-crds.sh and any YAML imports
+        chmod +x get-crds.sh
+        ./get-crds.sh
+        cdk8s import crds/crossplane.yaml --language go
 
-    - name: Show Manifest Output
-      run: |
-        echo "::group::Synthesized YAML"
-        cat cdk8s-demo/dist/*.yaml || true
-        echo "::endgroup::"
+    - name: Ensure dist/ directory exists
+      run: mkdir -p dist
 
-    - name: Upload synthesized manifests
+    - name: Upload generated manifests as artifact
       uses: actions/upload-artifact@v4
       with:
         name: cdk8s-manifests
-        path: cdk8s-demo/dist/
+        path: dist/
 
-    - name: Commit and push synthesized files
+    - name: Commit and push synthesized manifests
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git add cdk8s-demo/dist/
-        git diff --cached --quiet || git commit -m "chore: update synthesized Kubernetes manifests"
+        git add dist/
+        git diff --cached --quiet dist/ || git commit -m "chore: update synthesized Kubernetes manifests"
         git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:${{ github.ref }}
