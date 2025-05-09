@@ -1,0 +1,44 @@
+name: CDK8s Synth
+
+permissions:
+  contents: write
+  
+on:
+  push:
+  pull_request:
+
+jobs:
+  synth:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install CDK8s CLI
+      run: npm install -g cdk8s-cli
+
+    - name: Ensure dist/ directory exists
+      run: mkdir -p dist
+
+    - name: Run `cdk8s synth`
+      run: cdk8s synth
+
+    - name: Upload generated manifests as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cdk8s-manifests
+        path: dist/
+
+    - name: Commit and push synthesized manifests
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add dist/
+        git diff --cached --quiet dist/ || git commit -m "chore: update synthesized Kubernetes manifests"
+        git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:${{ github.ref }}
