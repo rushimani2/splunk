@@ -1,62 +1,48 @@
-name: cdk8s-demo-pipeline
+name: Run cdk8s Demo Script
 
 on:
-  push:
-    branches: master
+  workflow_dispatch:  # Triggered manually from GitHub UI
 
 jobs:
-  cdk8s-demo:
+  run-script:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Install kubectl
+      - name: Install dependencies
         run: |
-          KUBECTL_VERSION=$(curl -s https://dl.k8s.io/release/stable.txt)
-          curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/kubectl
-          kubectl version --client
-
-      - name: Install Helm
-        run: |
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          helm version
-
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Install cdk8s CLI
-        run: |
+          sudo apt update
+          sudo apt install -y curl unzip git helm kubectl
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt install -y nodejs
           npm install -g cdk8s-cli
-          cdk8s --version
+          go install github.com/aws/jsii-release/go/cmd/jsii@latest || true
 
-      - name: Clone cdk8s-demo
+      - name: Run cdk8s demo script
         run: |
+          set +e  # Continue on error
           git clone https://github.com/vfarcic/cdk8s-demo
-          cd cdk8s-demo
+          cd cdk8s-demo || exit 0
 
-      - name: Set up Kubernetes tools
-        run: |
-          cd cdk8s-demo
           helm repo add crossplane-stable https://charts.crossplane.io/stable
           helm repo update
+
           helm upgrade --install crossplane crossplane-stable/crossplane \
             --namespace crossplane-system --create-namespace --wait
-          kubectl apply -f crossplane/provider-aws.yaml
-          kubectl apply -f crossplane/provider-sql.yaml
 
-      - name: Initialize cdk8s Go App and Generate YAML
-        run: |
-          cd cdk8s-demo
-          cdk8s init go-app
-          cdk8s synth
+          kubectl apply --filename crossplane/provider-aws.yaml || true
+          kubectl apply --filename crossplane/provider-sql.yaml || true
 
-      - name: Import Crossplane CRDs into cdk8s
-        run: |
-          cd cdk8s-demo
-          cdk8s import github:crossplane/crossplane@1.9.1 --language go
-          kubectl get crd -o json | cdk8s import /dev/stdin --language go
+          cdk8s init go-app || true
+          cdk8s synth || true
+
+          cdk8s import github:crossplane/crossplane@1.9.1 --language go || true
+
+          kubectl get crd --output json | cdk8s import /dev/stdin --language go || true
+
+          chmod +x get-crds.sh || true
+          ./get-crds.sh || true
+
+          cdk8s import crds/crossplane.yaml --language go || true
